@@ -38,7 +38,13 @@ const filteredFields = [
   "conversation_id_str",
   "username",
   "tweet_url",
+  "possibly_sensitive",
+  "hashtags",
+  "user_mentions",
+  "place",
+  "place_coord_boundaries"
 ];
+
 
 type StartCrawlTwitterParams = {
   twitterSearchUrl?: string;
