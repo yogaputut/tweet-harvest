@@ -38,7 +38,7 @@ const filteredFields = [
   "conversation_id_str",
   "username",
   "tweet_url",
-  "coordinates" // Ditambahkan
+  "coordinates" 
 ];
 
 type StartCrawlTwitterParams = {
@@ -128,7 +128,7 @@ export async function crawl({
           return {
             tweet: tweetContent,
             user: userContent,
-            coordinates: tweetContent.coordinates // Ditambahkan
+            coordinates: tweetContent.coordinates 
           };
         })
         .filter((tweet) => tweet !== null);
@@ -140,7 +140,7 @@ export async function crawl({
 
         
 
-        tweet["coordinates"] = current.coordinates; // Ditambahkan
+        tweet["coordinates"] = current.coordinates; 
 
         
 
