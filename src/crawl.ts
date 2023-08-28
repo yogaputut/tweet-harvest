@@ -45,7 +45,6 @@ type StartCrawlTwitterParams = {
   twitterSearchUrl?: string;
 };
 
-// ... (kode sebelumnya)
 
 export async function crawl({
   ACCESS_TOKEN,
@@ -118,14 +117,14 @@ export async function crawl({
   }: StartCrawlTwitterParams = {}) {
     await page.goto(twitterSearchUrl);
 
-    // ... (kode sebelumnya)
+    
 
     async function scrollAndSave() {
-      // ... (kode sebelumnya)
+      
 
       const tweetContents = tweets
         .map((tweet) => {
-          // ... (kode sebelumnya)
+          
           return {
             tweet: tweetContent,
             user: userContent,
@@ -134,20 +133,20 @@ export async function crawl({
         })
         .filter((tweet) => tweet !== null);
 
-      // ... (kode sebelumnya)
+      
 
       const rows = comingTweets.reduce((prev: [], current: (typeof tweetContents)[0]) => {
         const tweet = pick(current.tweet, filteredFields);
 
-        // ... (kode sebelumnya)
+        
 
         tweet["coordinates"] = current.coordinates; // Ditambahkan
 
-        // ... (kode sebelumnya)
+        
 
       }, []);
 
-      // ... (kode sebelumnya)
+      
     }
 
     await scrollAndSave();
@@ -192,4 +191,4 @@ export async function crawl({
   }
 }
 
-// ... (kode sebelumnya)
+
