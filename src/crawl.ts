@@ -1,14 +1,14 @@
+import { ElementHandle } from "@playwright/test";
 import * as fs from "fs";
 import dayjs from "dayjs";
 import { pick } from "lodash";
 import chalk from "chalk";
 import path from "path";
-import { Entry } from "./types/tweets.types";
+import { TweetResponseData } from "./types/response-tweet";
 import { chromium } from "playwright-extra";
 import stealth from "puppeteer-extra-plugin-stealth";
 import { inputKeywords } from "./features/input-keywords";
 import { listenNetworkRequests } from "./features/listen-network-requests";
-import { HEADLESS_MODE } from "./env";
 
 chromium.use(stealth());
 
@@ -25,7 +25,6 @@ function appendCsv(pathStr: string, contents: any, cb?) {
   return fileName;
 }
 
-// Tambahkan 'coordinates' ke filteredFields
 const filteredFields = [
   "created_at",
   "id_str",
@@ -39,8 +38,13 @@ const filteredFields = [
   "conversation_id_str",
   "username",
   "tweet_url",
-  "coordinates"  // Baris baru
+  "possibly_sensitive",
+  "hashtags",
+  "user_mentions",
+  "place",
+  "place_coord_boundaries"
 ];
+
 
 type StartCrawlTwitterParams = {
   twitterSearchUrl?: string;
@@ -49,63 +53,183 @@ type StartCrawlTwitterParams = {
 export async function crawl({
   ACCESS_TOKEN,
   SEARCH_KEYWORDS,
-  TWEET_THREAD_URL,
   SEARCH_FROM_DATE,
   SEARCH_TO_DATE,
   TARGET_TWEET_COUNT = 10,
+  // default delay each tweet activity: 3 seconds
   DELAY_EACH_TWEET_SECONDS = 3,
   DEBUG_MODE,
   OUTPUT_FILENAME,
 }: {
   ACCESS_TOKEN: string;
-  SEARCH_KEYWORDS?: string;
+  SEARCH_KEYWORDS: string;
   SEARCH_FROM_DATE?: string;
   SEARCH_TO_DATE?: string;
   TARGET_TWEET_COUNT?: number;
   DELAY_EACH_TWEET_SECONDS?: number;
   DEBUG_MODE?: boolean;
   OUTPUT_FILENAME?: string;
-  TWEET_THREAD_URL?: string;
 }) {
-  // ... (kode sebelumnya)
+  let MODIFIED_SEARCH_KEYWORDS = SEARCH_KEYWORDS;
 
-  async function scrollAndSave() {
-    // ... (kode sebelumnya)
+  const CURRENT_PACKAGE_VERSION = require("../package.json").version;
 
-    const tweetContents = tweets
-      .map((tweet) => {
-        // ... (kode sebelumnya)
+  // change spaces to _
+  const FOLDER_DESTINATION = "./tweets-data";
+  const FUlL_PATH_FOLDER_DESTINATION = path.resolve(FOLDER_DESTINATION);
+  const filename = (OUTPUT_FILENAME || `${SEARCH_KEYWORDS} ${NOW}`).trim().replace(".csv", "");
 
-        return {
-          tweet: tweetContent,
-          user: userContent,
-          // Baris baru untuk mengekstraksi koordinat
-          coordinates: tweetContent.coordinates || null,
-        };
-      })
-      .filter((tweet) => tweet !== null);
+  const FILE_NAME = `${FOLDER_DESTINATION}/${filename}.csv`.replace(/ /g, "_").replace(/:/g, "-");
 
-    // ... (kode sebelumnya)
+  console.info(chalk.blue("\nOpening twitter search page...\n"));
 
-    // Tambahkan 'coordinates' ke headerRow
-    const headerRow = filteredFields.join(";") + "\n";
+  if (fs.existsSync(FILE_NAME)) {
+    console.info(
+      chalk.blue(`\nFound existing file ${FILE_NAME}, renaming to ${FILE_NAME.replace(".csv", ".old.csv")}`)
+    );
+    fs.renameSync(FILE_NAME, FILE_NAME.replace(".csv", ".old.csv"));
+  }
 
-    // ... (kode sebelumnya)
+  let TWEETS_NOT_FOUND_ON_LIVE_TAB = false;
 
-    const rows = comingTweets.reduce((prev: [], current: (typeof tweetContents)[0]) => {
-      const tweet = pick(current.tweet, filteredFields);
+  const browser = await chromium.launch({ headless: true });
 
-      // ... (kode sebelumnya)
+  const context = await browser.newContext({
+    screen: { width: 1240, height: 1080 },
+    storageState: {
+      cookies: [
+        {
+          name: "auth_token",
+          value: ACCESS_TOKEN,
+          domain: "twitter.com",
+          path: "/",
+          expires: -1,
+          httpOnly: true,
+          secure: true,
+          sameSite: "Strict",
+        },
+      ],
+      origins: [],
+    },
+  });
 
-      // Baris baru untuk menambahkan koordinat ke CSV
-      tweet["coordinates"] = current.coordinates ? JSON.stringify(current.coordinates) : "N/A";
+  const page = await context.newPage();
+  page.setDefaultTimeout(60 * 1000);
 
-      const row = Object.values(tweet).join(";");
+  listenNetworkRequests(page);
 
-      return [...prev, row];
-    }, []);
+  async function startCrawlTwitter({
+    twitterSearchUrl = "https://twitter.com/search-advanced?f=live",
+  }: StartCrawlTwitterParams = {}) {
+    await page.goto(twitterSearchUrl);
 
-    const csv = (rows as []).join("\n") + "\n";
+    // check is current page url is twitter login page (have /login in the url)
+    const isLoggedIn = !page.url().includes("/login");
+
+    if (!isLoggedIn) {
+      console.error("Invalid twitter auth token. Please check your auth token");
+      return browser.close();
+    }
+
+    inputKeywords(page, {
+      SEARCH_FROM_DATE,
+      SEARCH_TO_DATE,
+      SEARCH_KEYWORDS,
+      MODIFIED_SEARCH_KEYWORDS,
+    });
+
+    let timeoutCount = 0;
+    let additionalTweetsCount = 0;
+
+    const allData = {
+      tweets: [],
+    };
+
+    async function scrollAndSave() {
+      timeoutCount = 0;
+
+      while (allData.tweets.length < TARGET_TWEET_COUNT) {
+        // Wait for the next response or 3 seconds, whichever comes first
+        const response = await Promise.race([
+          page.waitForResponse((response) => response.url().includes("SearchTimeline")),
+          page.waitForTimeout(3000),
+        ]);
+
+        if (response) {
+          const { data: responseBody } = (await response.json()) as { data: TweetResponseData };
+
+          const tweets = responseBody.search_by_raw_query.search_timeline.timeline?.instructions?.[0]?.entries;
+
+          if (!tweets) {
+            console.error("No more tweets found, please check your search criteria and csv file result");
+            return;
+          }
+
+          if (!tweets.length) {
+            // found text "not found" on the page
+            if (await page.getByText("No results for").count()) {
+              TWEETS_NOT_FOUND_ON_LIVE_TAB = true;
+              console.info("No tweets found for the search criteria");
+              break;
+            }
+          }
+
+          const headerRow = filteredFields.join(";") + "\n";
+
+          if (!headerWritten) {
+            headerWritten = true;
+            appendCsv(FILE_NAME, headerRow);
+          }
+
+          const tweetContents = tweets
+            .map((tweet) => {
+              const isPromotedTweet = tweet.entryId.includes("promoted");
+
+              if (!tweet.content?.itemContent) return null;
+              if (isPromotedTweet) return null;
+
+              const result = tweet.content.itemContent.tweet_results.result;
+              if (!result?.core?.user_results) return null;
+
+              const tweetContent = result.legacy || result.tweet.legacy;
+              const userContent =
+                result.core.user_results.result.legacy || result.tweet.core.user_results.result.legacy;
+
+              return {
+                tweet: tweetContent,
+                user: userContent,
+              };
+            })
+            .filter((tweet) => tweet !== null);
+
+          // add tweets and users to allData
+          allData.tweets.push(...tweetContents);
+
+          // write tweets to CSV file
+          const comingTweets = tweetContents;
+
+          if (!fs.existsSync(FOLDER_DESTINATION)) {
+            const dir = fs.mkdirSync(FOLDER_DESTINATION, { recursive: true });
+            const dirFullPath = path.resolve(dir);
+
+            console.info(chalk.green(`Created new directory: ${dirFullPath}`));
+          }
+
+          const rows = comingTweets.reduce((prev: [], current: (typeof tweetContents)[0]) => {
+            const tweet = pick(current.tweet, filteredFields);
+
+            const cleanTweetText = `"${tweet.full_text.replace(/;/g, " ").replace(/\n/g, " ")}"`;
+
+            tweet["full_text"] = cleanTweetText;
+            tweet["username"] = current.user.screen_name;
+            tweet["tweet_url"] = `https://twitter.com/${current.user.screen_name}/status/${tweet.id_str}`;
+
+            const row = Object.values(tweet).join(";");
+
+            return [...prev, row];
+          }, []);
+
+          const csv = (rows as []).join("\n") + "\n";
           const fullPathFilename = appendCsv(FILE_NAME, csv);
 
           console.info(chalk.blue(`Your tweets saved to: ${fullPathFilename}`));
@@ -126,11 +250,6 @@ export async function crawl({
           timeoutCount++;
           console.info(chalk.gray("Scrolling more..."));
 
-          if (timeoutCount > TIMEOUT_LIMIT) {
-            console.info(chalk.yellow("No more tweets found, please check your search criteria and csv file result"));
-            break;
-          }
-
           await page.evaluate(() =>
             window.scrollTo({
               behavior: "smooth",
@@ -139,6 +258,7 @@ export async function crawl({
           );
 
           await scrollAndSave(); // call the function again to resume scrolling
+          break;
         }
 
         await page.evaluate(() =>
