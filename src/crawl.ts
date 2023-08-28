@@ -38,6 +38,7 @@ const filteredFields = [
   "conversation_id_str",
   "username",
   "tweet_url",
+  "location",
   ];
 
 
@@ -193,6 +194,7 @@ export async function crawl({
               return {
                 tweet: tweetContent,
                 user: userContent,
+                location: tweetContent.geo || userContent.location,
               };
             })
             .filter((tweet) => tweet !== null);
@@ -218,6 +220,7 @@ export async function crawl({
             tweet["full_text"] = cleanTweetText;
             tweet["username"] = current.user.screen_name;
             tweet["tweet_url"] = `https://twitter.com/${current.user.screen_name}/status/${tweet.id_str}`;
+            tweet["location"] = current.location; // tambahkan ini
 
             const row = Object.values(tweet).join(";");
 
